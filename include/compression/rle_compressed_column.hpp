@@ -1,49 +1,76 @@
+
+/*! \example dictionary_compressed_column.hpp
+ * This is an example of how to implement a compression technique in our framework. One has to inherit from the abstract
+ * base class CoGaDB::CompressedColumn and implement the pure virtual methods.
+ */
+
 #pragma once
 
-#include <boost/serialization/utility.hpp>
-#include <compression/compressed_column.hpp>
-
-using namespace std;
+#include "compressed_column.hpp"
+#include "core/global_definitions.hpp"
+#include <cereal/archives/portable_binary.hpp>
+#include <cereal/types/utility.hpp>
+#include <cereal/types/vector.hpp>
+#include <iterator>
 
 namespace CoGaDB {
 
+    /*!
+     *  \brief     This class represents a dictionary compressed column with type T, is the base class for all
+     * compressed typed column classes.
+     */
     template<class T>
-    class RLECompressedColumn : public CompressedColumn<T> {
+    class RLECompressedColumn final : public CompressedColumn<T> {
     public:
         /***************** constructors and destructor *****************/
-        RLECompressedColumn(const std::string &name, AttributeType db_type);
-        virtual ~RLECompressedColumn();
+        explicit RLECompressedColumn(const std::string &name);
 
-        virtual bool insert(const boost::any &new_Value);
-        virtual bool insert(const T &new_value);
+        ~RLECompressedColumn() final;
+
+        void insert(const ColumnType &new_Value) final;
+        void insert(const T &new_value) final;
+
         template<typename InputIterator>
-        bool insert(InputIterator first, InputIterator last);
+        void insert(InputIterator first, InputIterator last);
 
-        virtual bool update(TID tid, const boost::any &new_value);
-        virtual bool update(PositionListPtr tid, const boost::any &new_value);
+        void update(TID tid, const ColumnType &new_value) final;
 
-        virtual bool remove(TID tid);
+        void update(PositionList &tid, const ColumnType &new_value) final;
+
+        void remove(TID tid) final;
+
         // assumes tid list is sorted ascending
-        virtual bool remove(PositionListPtr tid);
-        virtual bool clearContent();
+        void remove(PositionList &tid) final;
 
-        virtual const boost::any get(TID tid);
-        // virtual const boost::any* const getRawData()=0;
-        virtual void print() const throw();
-        virtual size_t size() const throw();
-        virtual unsigned int getSizeinBytes() const throw();
+        void clearContent() final;
 
-        virtual const ColumnPtr copy() const;
+        ColumnType get(TID tid) final;
 
-        virtual bool store(const std::string &path);
-        virtual bool load(const std::string &path);
+        std::string print() const noexcept final;
 
-        virtual T &operator[](const int index);
+        [[nodiscard]] size_t size() const noexcept final;
+
+        [[nodiscard]] size_t getSizeInBytes() const noexcept final;
+
+        [[nodiscard]] virtual std::unique_ptr<ColumnBase> copy() const;
+
+        void store(const std::string &path) final;
+        void load(const std::string &path) final;
+
+        T operator[](int index) final;
+
+        /**
+         * @brief Serialization method called by Cereal. Implement this method in your compressed columns to get serialization working.
+         */
+        template<class Archive>
+        void serialize(Archive &archive) {
+            archive(values);// serialize things by passing them to the archive
+        }
 
     private:
-        typedef pair<uint8_t, T> Item;
+        typedef std::pair<uint8_t, T> Item;
 
-        vector<Item> values;
+        std::vector<Item> values;
 
         void tid_to_idx(TID tid, size_t &idx_of_run, size_t &idx_in_run);
     };
@@ -51,139 +78,130 @@ namespace CoGaDB {
     /***************** Start of Implementation Section ******************/
 
     template<class T>
-    RLECompressedColumn<T>::RLECompressedColumn(
-            const std::string &name, AttributeType db_type)
-        : CompressedColumn<T>(name, dpe), values() {}
+    RLECompressedColumn<T>::RLECompressedColumn(const std::string &name) : CompressedColumn<T>(name), values() {}
 
     template<class T>
-    RLECompressedColumn<T>::~RLECompressedColumn() {}
+    RLECompressedColumn<T>::~RLECompressedColumn() = default;
 
     template<class T>
-    void RLECompressedColumn<T>::tid_to_idx(TID tid, size_t &idx_of_run, size_t &idx_in_run) {
-        TID tid_of_run_start = 0;
-        idx_of_run = 0;
-        idx_in_run = 0;
-        size_t len = values.size();
-
-        while (tid_of_run_start <= tid && idx_of_run < len) {
-            Item &cur = values[idx_of_run];
-            idx_in_run = tid - tid_of_run_start;
-
-            if (idx_in_run < cur.first) break;
-            else
-                tid_of_run_start += values[idx_of_run++].first;// not in this run, skip
-        }
+    void RLECompressedColumn<T>::insert(const ColumnType &newRecord) {
+        const T &new_value = std::get<T>(newRecord);
+        insert(new_value);
     }
 
     template<class T>
-    bool RLECompressedColumn<T>::insert(const boost::any &new_value) {
-        if (new_value.empty()) return false;
-
-        if (typeid(T) == new_value.type()) {
-            return insert(boost::any_cast<T>(new_value));
-        }
-
-        return false;
-    }
-
-    template<class T>
-    bool RLECompressedColumn<T>::insert(const T &new_value) {
+    void RLECompressedColumn<T>::insert(const T &new_value) {
         size_t length = values.size();
 
         if (length > 0) {
             Item &most_recent_value = values[length - 1];
             if (most_recent_value.second == new_value && most_recent_value.first < UINT8_MAX - 1) {
                 most_recent_value.first++;
-                return true;
+                return;
             }
         }
 
-        values.push_back(make_pair(1, new_value));
-        return true;
+        values.push_back(std::make_pair(1, new_value));
     }
 
     template<typename T>
     template<typename InputIterator>
-    bool RLECompressedColumn<T>::insert(InputIterator start, InputIterator end) {
-        for (InputIterator i = start; i < end; ++i) insert(*i);
-        return true;
-    }
-
-    template<class T>
-    const boost::any RLECompressedColumn<T>::get(TID idx) {
-
-        return boost::any(operator[](idx));
-    }
-
-    template<class T>
-    void RLECompressedColumn<T>::print() const throw() {
-        cout << this->name_ << "(" << size() << ")" << endl;
-        for (auto const &pair: values) {
-            for (size_t i = 0; i < pair.first; ++i) cout << pair.second << endl;
+    void RLECompressedColumn<T>::insert(InputIterator start, InputIterator end) {
+        for (InputIterator i = start; i < end; ++i) {
+            insert(*i);
         }
     }
 
     template<class T>
-    size_t RLECompressedColumn<T>::size() const throw() {
+    ColumnType RLECompressedColumn<T>::get(TID id) {
+        return {operator[](id)};
+    }
+
+    template<class T>
+    std::string RLECompressedColumn<T>::print() const noexcept {
+        std::stringstream output;
+
+        output << this->name_ << "(" << size() << ")" << std::endl;
+        for (auto const &pair: values) {
+            for (size_t i = 0; i < pair.first; ++i) output << pair.second << std::endl;
+        }
+
+        return output.str();
+    }
+
+    template<class T>
+    size_t RLECompressedColumn<T>::size() const noexcept {
         uint64_t size = 0;
         for (auto const &pair: values) size += pair.first;
         return size;
     }
 
     template<class T>
-    const ColumnPtr RLECompressedColumn<T>::copy() const {
-        return ColumnPtr(new RLECompressedColumn(*this));
+    std::unique_ptr<ColumnBase> RLECompressedColumn<T>::copy() const {
+        return std::make_unique<RLECompressedColumn<T>>(*this);
     }
 
     template<class T>
-    bool RLECompressedColumn<T>::update(TID tid, const boost::any &new_value) {
-        if (new_value.empty() || typeid(T) != new_value.type()) return false;
+    void RLECompressedColumn<T>::tid_to_idx(TID tid, size_t &idx_pair, size_t &idx_str) {
+        TID tid_of_run_start = 0;
+        idx_pair = 0;
+        idx_str = 0;
+        size_t len = values.size();
 
-        size_t idx_of_run = 0, idx_in_run = 0;
-        tid_to_idx(tid, idx_of_run, idx_in_run);
+        while (tid_of_run_start <= tid && idx_pair < len) {
+            Item &cur = values[idx_pair];
+            idx_str = tid - tid_of_run_start;
 
-        auto &entry = values[idx_of_run];
+            if (idx_str < cur.first) break;
+            else
+                tid_of_run_start += values[idx_pair++].first;// not in this run, skip
+        }
+    }
 
-        auto val = boost::any_cast<T>(new_value);
+    template<class T>
+    void RLECompressedColumn<T>::update(TID tid, const ColumnType &new_value) {
+        size_t idx_pair = 0, idx_str = 0;
+        tid_to_idx(tid, idx_pair, idx_str);
+
+        auto &entry = values[idx_pair];
+
+        auto val = std::get<T>(new_value);
         if (entry.first == 1) {
-            // is run
+            // value only occurs once, can be replaced without problems
             entry.second = val;
-        } else if (idx_in_run == 0) {
-            // Updating part of a run decreases its length
-            // leads, insert before run
+        } else if (idx_str == 0) {
+            // Updating part of a run decreases its length AAAABBBCCCC
+            // leading value needs to be replaced
+            // insert before pair {4, A}; {3, B}; {4, C}
             entry.first--;
-            values.insert(values.begin() + idx_of_run, make_pair(1, val));
-        } else if (idx_in_run == entry.first) {
-            // trails, insert after run
+            values.insert(values.begin() + idx_pair, std::make_pair(1, val));
+        } else if (idx_str == entry.first) {
+            // trailing value needs to be replaced
+            // insert after pair
             entry.first--;
-            values.insert(values.begin() + idx_of_run, make_pair(1, val));
+            values.insert(values.begin() + idx_pair, std::make_pair(1, val));
         } else {
-            // inside, split run, insert inbetween
-            // 1 1 1 1 1 1 1 1 1 [(9, 1)]
-            // [5] = 2
-            // 1 1 1 1 1 2 1 1 1 [(5, 1), (1, 2), (3, 1)]
-            uint8_t len_a = idx_in_run, len_b = entry.first - len_a - 1;
+            // value inside of string needs to be replaced
+            // split pair, insert inbetween
+            uint8_t len_a = idx_str, len_b = entry.first - len_a - 1;
 
             entry.first = len_a;
-            vector<Item> v{make_pair(1, val), make_pair(len_b, entry.second)};
-            values.insert(values.begin() + idx_of_run + 1, begin(v), end(v));
+            std::vector<Item> v{std::make_pair(1, val), std::make_pair(len_b, entry.second)};
+            values.insert(values.begin() + idx_pair + 1, begin(v), end(v));
         }
-
-        return true;
     }
 
     template<class T>
-    bool RLECompressedColumn<T>::update(PositionListPtr,
-                                        const boost::any &) {
-        return false;
+    void RLECompressedColumn<T>::update(PositionList &positions, const ColumnType &new_value) {
+        for (auto &tid: positions) {
+            update(tid, new_value);
+        }
     }
 
     template<class T>
-    bool RLECompressedColumn<T>::remove(TID tid) {
+    void RLECompressedColumn<T>::remove(TID tid) {
         size_t idx_of_run = 0, idx_in_run = 0;
         tid_to_idx(tid, idx_of_run, idx_in_run);
-
-        // TODO: abort/false if tid not in values
 
         auto &entry = values[idx_of_run];
         if (entry.first == 1) {
@@ -192,53 +210,44 @@ namespace CoGaDB {
         } else {
             values[idx_of_run].first--;
         }
-
-        return true;
     }
 
     template<class T>
-    bool RLECompressedColumn<T>::remove(PositionListPtr) {
-        return false;
+    void RLECompressedColumn<T>::remove(PositionList &positions) {
+        for (auto &tid: positions) {
+            remove(tid);
+        }
     }
 
     template<class T>
-    bool RLECompressedColumn<T>::clearContent() {
+    void RLECompressedColumn<T>::clearContent() {
         values.clear();
-        return true;
     }
 
     template<class T>
-    bool RLECompressedColumn<T>::store(const string &dir) {
-        string path(dir);
-        path += "/";
-        path += this->name_;
-        ofstream outfile(path.c_str(), ios_base::binary | ios_base::out);
-        boost::archive::binary_oarchive oa(outfile);
-
-        oa << values;
-
-        outfile.flush();
-        outfile.close();
-        return true;
-    }
-
-    template<class T>
-    bool RLECompressedColumn<T>::load(const string &dir) {
-        string path(dir);
-        path += "/";
+    void RLECompressedColumn<T>::store(const std::string &path_) {
+        std::string path(path_);
         path += this->name_;
 
-        ifstream infile(path.c_str(), ios_base::binary | ios_base::in);
-        boost::archive::binary_iarchive ia(infile);
-        ia >> values;
-        infile.close();
+        std::ofstream outfile(path.c_str(), std::ofstream::binary | std::ofstream::out | std::ofstream::trunc);
+        assert(outfile.is_open());
+        cereal::PortableBinaryOutputArchive oarchive(outfile);// Create an output archive
+        oarchive(*this);
+    }
 
-        return true;
+    template<class T>
+    void RLECompressedColumn<T>::load(const std::string &path_) {
+        std::string path(path_);
+        path += this->name_;
+
+        std::ifstream infile(path.c_str(), std::ifstream::binary | std::ifstream::in);
+        cereal::PortableBinaryInputArchive ia(infile);
+        ia(*this);
     }
 
 
     template<class T>
-    T &RLECompressedColumn<T>::operator[](int idx) {
+    T RLECompressedColumn<T>::operator[](int idx) {
         static T t;
         for (auto &pair: values) {
             if (pair.first > idx) return pair.second;
@@ -249,10 +258,10 @@ namespace CoGaDB {
     }
 
     template<class T>
-    unsigned int RLECompressedColumn<T>::getSizeinBytes() const throw() {
+    size_t RLECompressedColumn<T>::getSizeInBytes() const noexcept {
         return values.size() * sizeof(Item);
     }
 
     /***************** End of Implementation Section ******************/
 
-};// namespace CoGaDB
+}// namespace CoGaDB

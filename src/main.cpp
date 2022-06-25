@@ -3,7 +3,7 @@
 
 // TODO: include your compressed column implementations here
 #include "compression/dictionary_compressed_column.hpp"
-// #include "compression/rle_compressed_column.hpp"
+#include "compression/rle_compressed_column.hpp"
 
 #include "config.hpp"
 #include "tests/utils.hpp"
@@ -27,7 +27,7 @@ using namespace CoGaDB;
 TEMPLATE_PRODUCT_TEST_CASE_METHOD(Column_Test_Fixture,
                                   "Template test case method with test types specified inside std::tuple",
                                   "[class][template]",
-                                  (Column, DictionaryCompressedColumn),
+                                  (Column, RLECompressedColumn),
                                   (int, float, std::string)) {
     using ValueType = typename Column_Test_Fixture<TestType>::ValueType;
     auto &col_one = Column_Test_Fixture<TestType>::col_one;
