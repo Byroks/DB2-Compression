@@ -10,8 +10,9 @@
 
 #include <catch2/catch.hpp>
 
-template<typename T>
-struct Column_Test_Fixture {
+template <typename T>
+struct Column_Test_Fixture
+{
     using ValueType = typename T::value_type;
     Column_Test_Fixture() : col_one(getAttributeString<ValueType>()),
                             col_two(getAttributeString<ValueType>()),
@@ -27,8 +28,9 @@ using namespace CoGaDB;
 TEMPLATE_PRODUCT_TEST_CASE_METHOD(Column_Test_Fixture,
                                   "Template test case method with test types specified inside std::tuple",
                                   "[class][template]",
-                                  (Column, RLECompressedColumn),
-                                  (int, float, std::string)) {
+                                  (Column, RLECompressedColumn, DictionaryCompressedColumn),
+                                  (int, float, std::string))
+{
     using ValueType = typename Column_Test_Fixture<TestType>::ValueType;
     auto &col_one = Column_Test_Fixture<TestType>::col_one;
     auto &col_two = Column_Test_Fixture<TestType>::col_two;
